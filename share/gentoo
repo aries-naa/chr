@@ -1,0 +1,207 @@
+#!/bin/zsh
+
+gentoo_home=~/gentoo
+
+portage=${gentoo_home}/portage
+packages=${gentoo_home}/packages
+overlays=${gentoo_home}/overlays
+distfiles=${gentoo_home}/distfiles
+
+mod_chroot_prepare () {
+
+    # проверка существования каталогов.
+    root=${1}
+    if [ -n "${root}"                    -a \
+         -d ${portage}/packages          -a \
+         -d ${packages}                  -a \
+         -d ${distfiles}                 -a \
+         -d ${overlays}                  -a \
+         -d ${root}/usr/portage/packages -a \
+         -d ${root}/usr/overlays ]; then
+
+        if chroot_prepare ${root}; then
+            sudo mount --bind ${portage}   ${root}/usr/portage
+            sudo mount --bind ${packages}  ${root}/usr/portage/packages
+            sudo mount --bind ${distfiles} ${root}/usr/portage/distfiles
+            sudo mount --bind ${overlays}  ${root}/usr/overlays
+        else
+            return 1
+        fi
+    else
+        echo Check gentoo directories:
+        echo   ${portage}/packages          $(if [ -d ${portage}/packages ];          then echo ok; else echo fail; fi)
+        echo   ${packages}                  $(if [ -d ${packages} ];                  then echo ok; else echo fail; fi)
+        echo   ${distfiles}                 $(if [ -d ${distfiles} ];                 then echo ok; else echo fail; fi)
+        echo   ${overlays}                  $(if [ -d ${overlays} ];                  then echo ok; else echo fail; fi)
+        echo   ${root}/usr/portage/packages $(if [ -d ${root}/usr/portage/packages ]; then echo ok; else echo fail; fi)
+        echo   ${root}/usr/overlays         $(if [ -d ${root}/usr/overlays ];         then echo ok; else echo fail; fi)
+        return 1
+    fi
+
+    return 0
+}
+
+mod_chroot_clean () {
+
+    # проверка существования каталогов.
+    local root=$1
+    [ -n "${root}" ] || return
+    [ -d "${root}" ] || return
+
+    sudo umount ${root}/usr/overlays
+    sudo umount ${root}/usr/portage/packages
+    sudo umount ${root}/usr/portage/distfiles
+    sudo umount ${root}/usr/portage
+
+    chroot_clean ${root}
+
+    return 0
+}
+
+# path [release [arch]]
+mod_install_distrib () {
+
+    local chroot_path=${1}; [ -n "$chroot_path" ] || return 1
+    local release=${2:-latest}
+    local arch=${3:-i686}
+
+    #local stage3=${gentoo_home}/stage3-${arch}-${release}.tar.bz2
+    local stage3=${gentoo_home}/stage3-${arch}-${release}.tar.xz
+    if [ -r ${stage3} ]; then
+	# Создание каталогов.
+	mkdir -p ${chroot_path}/etc/portage/repos.conf || {echo "Can't create ${chroot_path}/etc/portage/repos.conf"; return 1}
+	mkdir -p ${chroot_path}/usr/portage/packages   || {echo "Can't create ${chroot_path}/usr/portage/packages";   return 1}
+	mkdir -p ${chroot_path}/usr/overlays           || {echo "Can't create ${chroot_path}/usr/overlays";           return 1}
+	mkdir -p ${chroot_path}/run/shm                || {echo "Can't create ${chroot_path}/run/shm";                return 1}
+
+	# Распаковка stage3.
+#	sudo tar --absolute-names --no-acls --no-xattrs --directory ${chroot_path} --bzip2 --extract --verbose --file ${stage3}
+	sudo tar --absolute-names --directory ${chroot_path} --xz --extract --verbose --file ${stage3}
+
+	# сеть/интернет - resolv.conf
+	[ -r /etc/resolv.conf ] && sudo cp /etc/resolv.conf ${chroot_path}/etc/resolv.conf
+	
+	# временная зона.
+	[ -r /etc/timezone ]  && sudo cp /etc/timezone  ${chroot_path}/etc/
+	[ -r /etc/localtime ] && sudo cp /etc/localtime ${chroot_path}/etc/
+	
+	# локализация.
+	cat << EOF | sudo tee -a ${chroot_path}/etc/locale.gen > /dev/null
+en_US.UTF-8 UTF-8
+EOF
+	
+	## /opt.
+	#[ -d ${chroot_path}/opt ] && sudo chown ${USER} ${chroot_path}/opt
+	
+	# bashrc.
+	if [ -f ${chroot_path}/etc/bash/bashrc ]; then
+	    sudo rm ${chroot_path}/etc/bash/bashrc
+	fi
+	
+	# XAUTHORITY.
+	sudo mkdir -p ${chroot_path}$(dirname ${XAUTHORITY})
+	sudo chown ${USER}:users ${chroot_path}$(dirname ${XAUTHORITY})
+
+	# portage.
+#	cat << EOF | sudo tee -a ${chroot_path}/etc/portage/make.conf > /dev/null
+#
+## build
+#ACCEPT_KEYWORDS="x86"
+#FEATURES="getbinpkg buildpkg"
+#CLEAN_DELAY="0"
+#PKGDIR="\${PORTDIR}/packages/${name}"
+#EOF
+#
+#	cat << EOF | sudo tee ${chroot_path}/etc/portage/package.accept_keywords > /dev/null
+#sys-fs/unionfs-fuse ~x86
+#x11-drivers/xf86-video-openchrome ~x86
+#EOF
+#
+#	cat << EOF | sudo tee ${chroot_path}/etc/portage/package.use/live > /dev/null
+#sys-apps/busybox -static syslog
+##net-fs/cifs-utils -acl -ads -caps -caps-ng
+##net-misc/dropbear minimal -static
+##x11-apps/xinit minimal
+##dev-lang/tk -aqua -xscreensaver
+##dev-lang/tk truetype -aqua -xscreensaver
+##net-misc/rdesktop alsa -ao -kerberos -libressl -oss -pcsc-lite xrandr
+##media-libs/mesa -llvm -gallium -video_cards_radeonsi -video_cards_intel
+#media-libs/mesa -llvm -gallium
+##x11-base/xorg-server -glamor -libressl -selinux -systemd -tslib udev
+#x11-base/xorg-server -glamor -systemd
+#x11-base/xorg-drivers -video_cards_radeonsi -video_cards_amdgpu
+##x11-drivers/xf86-video-intel -dri3 -xvmc
+#x11-drivers/xf86-video-intel dri3 xvmc uxa
+#x11-drivers/xf86-video-ati -glamor
+#x11-drivers/xf86-video-amdgpu -glamor
+#
+#sys-auth/consolekit policykit
+#x11-libs/cairo X
+#dev-libs/glib dbus
+#x11-libs/pango X
+#EOF
+#
+#	# overlays.
+#	sudo mkdir -p ${chroot_path}/etc/portage/repos.conf
+#
+#	cat << EOF | sudo tee ${chroot_path}/etc/portage/repos.conf/gentoo.conf > /dev/null
+#[DEFAULT]
+#main-repo = gentoo
+#
+#[gentoo]
+#location = /usr/portage
+#sync-type = rsync
+#sync-uri = rsync://rsync.gentoo.org/gentoo-portage
+#auto-sync = yes
+#EOF
+#	
+#	cat << EOF | sudo tee ${chroot_path}/etc/portage/repos.conf/tc.conf > /dev/null
+#[tc]
+#location = /usr/overlays/tc
+#masters = gentoo
+#auto-sync = no
+#EOF
+
+	if mod_chroot_prepare ${chroot_path}; then
+
+	    sudo chroot ${chroot_path} emerge --config sys-libs/timezone-data
+	    sudo chroot ${chroot_path} /usr/sbin/locale-gen
+
+	    mod_chroot_clean ${chroot_path}
+	else
+	    return 1
+	fi
+    else
+	echo "Can't find stage3 file: ${stage3}"
+    fi
+
+    return 0
+}
+
+mod_install_build () {
+
+    local name=${1}
+
+    chr_run ${name} emerge \
+	    app-admin/sudo \
+	    app-shells/zsh \
+	    app-portage/gentoolkit \
+	    sys-kernel/genkernel
+
+#	    sys-kernel/gentoo-sources \
+#	    app-portage/layman \
+#	    sys-devel/crossdev
+
+	sudo chroot ${chroot_path} groupadd sudo
+	cat << EOF | sudo tee ${chroot_path}/etc/sudoers > /dev/null
+Defaults        env_reset
+Defaults        mail_badpass
+Defaults        secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+root  ALL=(ALL:ALL) ALL
+%sudo ALL=(ALL:ALL) ALL
+
+#includedir /etc/sudoers.d
+EOF
+
+}

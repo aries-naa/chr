@@ -1,0 +1,266 @@
+#!/bin/zsh
+
+# chr -h                                     - подсказка
+# chr -i debian|gentoo name [release [arch]] - установка
+# chr -b name                                - установка пакетов для сборки
+# chr -d name                                - удаление
+# chr -c name                                - очистка примонтированных каталогов
+# chr -p name                                - корневой каталог
+# chr name [command]                         - использование (умеет отличать дистрибутивы)
+# chr -u name [command]                      - использоание от имени пользователя
+
+chr_modules=(~/.chr /usr/local/share/chr /usr/share/chr)
+chr_home=~/chroot
+
+check_distribution () {
+    local chroot_path=${1}; [ -n "${chroot_path}" ] || return 1
+    local os_release=${chroot_path}/etc/os-release
+
+    if [ -r ${os_release} ]; then
+	local distribution=$(cat ${os_release} | grep "^ID=.*" | sed 's/ID=//g'); [ -n "${distribution}" ] || return 1
+	load_module ${distribution}
+    else
+	return 1
+    fi
+}
+
+chroot_prepare () {
+
+    # проверка существования каталогов.
+    local root=$1; [ -n "${root}" ] || return 1
+    if [ -n "${root}"    -a \
+            -d ${root}/proc -a \
+            -d ${root}/sys  -a \
+            -d ${root}/dev  -a \
+            -d ${root}/tmp  -a \
+            -d ${root}/run/shm ]; then
+
+        # подготовка среды chroot.
+        sudo mount --bind /proc     ${root}/proc
+        sudo mount --bind /sys      ${root}/sys
+        sudo mount --bind /dev      ${root}/dev
+        sudo mount --bind /dev/pts  ${root}/dev/pts
+        sudo mount --bind /tmp      ${root}/tmp
+        sudo mount --bind /run/shm  ${root}/run/shm
+
+        # /etc/resolv.conf
+        if [ -r /etc/resolv.conf ]; then
+            sudo cp /etc/resolv.conf ${root}/etc
+        fi
+    else
+        echo Check chroot directories:
+        echo  ${root}/proc    $(if [ -d ${root}/proc ];    then echo ok; else echo fail; fi)
+        echo  ${root}/sys     $(if [ -d ${root}/sys ];     then echo ok; else echo fail; fi)
+        echo  ${root}/dev     $(if [ -d ${root}/dev ];     then echo ok; else echo fail; fi)
+        echo  ${root}/tmp     $(if [ -d ${root}/tmp ];     then echo ok; else echo fail; fi)
+        echo  ${root}/run/shm $(if [ -d ${root}/run/shm ]; then echo ok; else echo fail; fi)
+        return 1
+    fi
+
+    return 0
+}
+
+chroot_clean () {
+
+    # проверка существования каталогов.
+    local root=$1
+    [ -n "${root}" ] || return 1
+    [ -d "${root}" ] || return 1
+
+    # размнотирование.
+    sudo umount ${root}/run/shm
+    sudo umount ${root}/dev/pts
+    sudo umount ${root}/dev
+    sudo umount ${root}/sys
+    sudo umount ${root}/proc
+    sudo umount ${root}/tmp
+
+    return 0
+}
+
+load_module () {
+    local distribution=${1}
+    [ -n "${distribution}" ] || return 1
+
+    local module_path
+    for module_path in ${chr_modules}; do
+	if [ -r "${module_path}/${distribution}" ]; then
+	    if source "${module_path}/${distribution}" ; then
+		return 0
+	    fi
+	fi
+    done
+
+    return 1
+}
+
+chr_help () {
+    cat << EOF
+chr -h                                     - подсказка
+chr -i debian|gentoo name [release [arch]] - установка
+chr -b name                                - установка пакетов для сборки
+chr -d name                                - удаление
+chr -c name                                - очистка примонтированных каталогов
+chr -p name                                - корневой каталог
+chr name [command]                         - использование (умеет отличать дистрибутивы)
+chr -u name [command]                      - использование от имени пользователя
+EOF
+}
+
+chr_install () {
+    local distribution=${1}; [ -n "${distribution}" ] || {echo "Distribution not defined"; return 1}; shift
+    local name=${1};         [ -n "${name}" ]         || {echo "Chroot name not defined";  return 1}; shift
+    local hostname=$(hostname)
+
+    local chroot_path=$(chr_path ${name})
+    load_module ${distribution} || {echo "Can't load module for <${distribution}>"; return 1}
+
+    #[ ! -e ${chroot_path} ] || {echo "Chroot ${name} already installed"; return 1}
+
+    if mkdir -p ${chroot_path}; then
+	if mod_install_distrib ${chroot_path} ${@}; then
+
+	    # hostname.
+	    echo ${hostname} | sudo tee ${chroot_path}/etc/hostname > /dev/null
+
+	    # hosts.
+	    echo 127.0.0.1 localhost ${hostname} ${name} | sudo tee ${chroot_path}/etc/hosts > /dev/null
+
+
+	    return 0
+	fi
+    fi
+
+    return 1
+}
+
+chr_install_build () {
+    local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}
+    local chroot_path=$(chr_path ${name})
+
+    if check_distribution ${chroot_path}; then
+
+	mod_install_build ${name}
+
+	# sudo.
+	sudo sed -i 's/%sudo.*/%sudo ALL=\(ALL:ALL\) NOPASSWD:ALL/g' ${chroot_path}/etc/sudoers
+	echo Defaults timestamp_timeout = 120 | sudo tee -a ${chroot_path}/etc/sudoers > /dev/null
+
+	# создание пользователя.
+	local chroot_user=${USER}
+	local chroot_home=${HOME}
+	local chroot_shell=${SHELL}
+	local chroot_id=$(id -u)
+
+	sudo chroot ${chroot_path} useradd -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
+
+	# users's zsh.
+	cat << EOF > ${chroot_path}${chroot_home}/.zshrc
+HISTFILE=~/.histfile
+HISTSIZE=1000
+SAVEHIST=1000
+
+setopt appendhistory autocd beep extendedglob nomatch notify
+bindkey -e
+
+autoload -Uz compinit
+compinit
+
+export LANG=en_US.UTF-8
+export PROMPT="\$(tput setaf 6)${name}\$(tput sgr0) %% "
+EOF
+
+    else
+	return 1
+    fi
+}
+
+chr_delete () {
+
+    if chr_clean ${@}; then
+	
+	local root=$(chr_path ${1})
+	
+	if [ -d "${root}" ]; then
+	    sudo rm -rf ${root}
+	fi
+	
+	return 0
+    else
+	return 1
+    fi
+}
+
+chr_clean () {
+
+    local name=${1}; [ -n "${name}" ] || {echo "Can't determine chroot - name empty."; return 1}
+    local root=$(chr_path ${name})
+    
+    mount | awk '{print $3}' | grep ${root} | sort -r | xargs -n1 -r sudo umount -fl
+
+    local mounts
+    mounts=$(mount | awk '{print $3}' | grep ${root})
+
+    if [ -z "${mounts}" ]; then
+	return 0
+    else
+	return 1
+    fi
+
+}
+
+chr_path () {
+
+    local name=${1}; [ -n "${name}" ] || {echo "Can't determine chroot - name empty."; return 1}
+
+    if  [ -n "${name}" ]; then
+	echo ${chr_home%/}/${name#/}
+	return 0
+    else
+	return 1
+    fi
+}
+
+chr_run () {
+    local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}; shift
+    local chroot_path=$(chr_path ${name}); [ -d "${chroot_path}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
+
+    # нужный модуль уже загружен после check_distribution.
+    if check_distribution ${chroot_path}; then
+	if mod_chroot_prepare ${chroot_path}; then
+	    sudo PS1="$(tput setaf 6)${name} $(tput setaf 2)#$(tput sgr0) " LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
+	    mod_chroot_clean ${chroot_path}
+	fi
+    else
+	if chroot_prepare ${chroot_path}; then
+	    sudo PS1="$(tput setaf 6)${name} $(tput setaf 2)#$(tput sgr0) " LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
+	    chroot_clean ${chroot_path}
+	else
+	    echo "Can't determine type of distribution."
+	    return 1
+	fi
+    fi
+
+    return 0
+}
+
+chr_user_run () {
+    return 0
+}
+
+command=${1}
+if [ -z "${command}" ]; then
+    chr_help
+    exit 1
+fi
+
+case ${command} in
+    -h) chr_help ;;
+    -i) shift; chr_install ${@} ;;
+    -b) shift; chr_install_build ${@} ;;
+    -d) shift; chr_delete ${@} ;;
+    -c) shift; chr_clean ${@} ;;
+    -p) shift; chr_path ${@} ;;
+    -u) shift; chr_user_run ${@} ;;
+    *)  chr_run ${@} ;;
+esac
