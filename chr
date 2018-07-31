@@ -245,6 +245,7 @@ chr_run () {
 }
 
 chr_user_run () {
+
     return 0
 }
 
