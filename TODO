@@ -1,0 +1,4 @@
+-*- mode: org -*-
+* TODO пользовательские настройки bash и zsh
+* TODO глюк с копированием файлов во время chr -b <name>
+* TODO chr -u <name>
