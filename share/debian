@@ -104,5 +104,6 @@ mod_install_build () {
 	texinfo \
 	squashfs-tools \
 	debootstrap \
+	uuid-runtime \
 	live-build
 }

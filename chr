@@ -7,6 +7,7 @@
 # chr -c name                                - очистка примонтированных каталогов
 # chr -p name                                - корневой каталог
 # chr name [command]                         - использование (умеет отличать дистрибутивы)
+# chr -a name                                - добавить пользователя
 # chr -u name [command]                      - использоание от имени пользователя
 
 chr_modules=(~/.chr /usr/local/share/chr /usr/share/chr)
@@ -28,20 +29,21 @@ chroot_prepare () {
 
     # проверка существования каталогов.
     local root=$1; [ -n "${root}" ] || return 1
-    if [ -n "${root}"    -a \
-            -d ${root}/proc -a \
-            -d ${root}/sys  -a \
-            -d ${root}/dev  -a \
-            -d ${root}/tmp  -a \
-            -d ${root}/run/shm ]; then
+    if [ -n "${root}"           -a \
+            -d ${root}/proc     -a \
+            -d ${root}/sys      -a \
+            -d ${root}/dev      -a \
+	    -d ${root}/dev/pts  -a \
+            -d ${root}/tmp      -a \
+            -d ${root}/run ]; then
 
         # подготовка среды chroot.
-        sudo mount --bind /proc     ${root}/proc
-        sudo mount --bind /sys      ${root}/sys
-        sudo mount --bind /dev      ${root}/dev
-        sudo mount --bind /dev/pts  ${root}/dev/pts
-        sudo mount --bind /tmp      ${root}/tmp
-        sudo mount --bind /run/shm  ${root}/run/shm
+        sudo mount --bind /proc    ${root}/proc
+        sudo mount --bind /sys     ${root}/sys
+        sudo mount --bind /dev     ${root}/dev
+        sudo mount --bind /dev/pts ${root}/dev/pts
+        sudo mount --bind /tmp     ${root}/tmp
+        sudo mount --bind /run     ${root}/run
 
         # /etc/resolv.conf
         if [ -r /etc/resolv.conf ]; then
@@ -51,9 +53,10 @@ chroot_prepare () {
         echo Check chroot directories:
         echo  ${root}/proc    $(if [ -d ${root}/proc ];    then echo ok; else echo fail; fi)
         echo  ${root}/sys     $(if [ -d ${root}/sys ];     then echo ok; else echo fail; fi)
+	echo  ${root}/dev/pts $(if [ -d ${root}/dev/pts ]; then echo ok; else echo fail; fi)
         echo  ${root}/dev     $(if [ -d ${root}/dev ];     then echo ok; else echo fail; fi)
         echo  ${root}/tmp     $(if [ -d ${root}/tmp ];     then echo ok; else echo fail; fi)
-        echo  ${root}/run/shm $(if [ -d ${root}/run/shm ]; then echo ok; else echo fail; fi)
+        echo  ${root}/run     $(if [ -d ${root}/run ];     then echo ok; else echo fail; fi)
         return 1
     fi
 
@@ -68,7 +71,7 @@ chroot_clean () {
     [ -d "${root}" ] || return 1
 
     # размнотирование.
-    sudo umount ${root}/run/shm
+    sudo umount ${root}/run
     sudo umount ${root}/dev/pts
     sudo umount ${root}/dev
     sudo umount ${root}/sys
@@ -103,6 +106,7 @@ chr -d name                                - удаление
 chr -c name                                - очистка примонтированных каталогов
 chr -p name                                - корневой каталог
 chr name [command]                         - использование (умеет отличать дистрибутивы)
+chr -a name                                - обавить пользователя
 chr -u name [command]                      - использование от имени пользователя
 EOF
 }
@@ -152,8 +156,8 @@ chr_install_build () {
 	local chroot_shell=${SHELL}
 	local chroot_id=$(id -u)
 
-	sudo chroot ${chroot_path} useradd -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
-
+	sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
+	
 	# users's zsh.
 	cat << EOF > ${chroot_path}${chroot_home}/.zshrc
 HISTFILE=~/.histfile
