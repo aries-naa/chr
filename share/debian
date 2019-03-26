@@ -1,11 +1,7 @@
 #!/bin/zsh
 
-#repo=http://s75ocs01.chel.cbr.ru/debian/
 repo=http://ftp.debian.org/debian
-#repo=http://localhost:8080/
-
-release=jessie
-#release=stretch
+release=buster
 
 mod_chroot_prepare () {
 

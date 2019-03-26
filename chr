@@ -7,7 +7,7 @@
 # chr -c name                                - очистка примонтированных каталогов
 # chr -p name                                - корневой каталог
 # chr name [command]                         - использование (умеет отличать дистрибутивы)
-# chr -a name                                - добавить пользователя
+# chr -a [name]                              - добавить пользователя
 # chr -u name [command]                      - использоание от имени пользователя
 
 chr_modules=(~/.chr /usr/local/share/chr /usr/share/chr)
@@ -106,7 +106,7 @@ chr -d name                                - удаление
 chr -c name                                - очистка примонтированных каталогов
 chr -p name                                - корневой каталог
 chr name [command]                         - использование (умеет отличать дистрибутивы)
-chr -a name                                - обавить пользователя
+chr -a [name]                              - обавить пользователя
 chr -u name [command]                      - использование от имени пользователя
 EOF
 }
@@ -119,8 +119,6 @@ chr_install () {
     local chroot_path=$(chr_path ${name})
     load_module ${distribution} || {echo "Can't load module for <${distribution}>"; return 1}
 
-    #[ ! -e ${chroot_path} ] || {echo "Chroot ${name} already installed"; return 1}
-
     if mkdir -p ${chroot_path}; then
 	if mod_install_distrib ${chroot_path} ${@}; then
 
@@ -130,9 +128,12 @@ chr_install () {
 	    # hosts.
 	    echo 127.0.0.1 localhost ${hostname} ${name} | sudo tee ${chroot_path}/etc/hosts > /dev/null
 
-
 	    return 0
+	else
+	    echo "Can't install distribution ${@} into ${chroot_path}"
 	fi
+    else
+	echo "Can't create root path: ${chroot_path}"
     fi
 
     return 1
@@ -231,24 +232,48 @@ chr_run () {
 
     # нужный модуль уже загружен после check_distribution.
     if check_distribution ${chroot_path}; then
-	if mod_chroot_prepare ${chroot_path}; then
-	    sudo PS1="$(tput setaf 6)${name} $(tput setaf 2)#$(tput sgr0) " LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
-	    mod_chroot_clean ${chroot_path}
+	if ! mod_chroot_prepare ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
 	fi
     else
-	if chroot_prepare ${chroot_path}; then
-	    sudo PS1="$(tput setaf 6)${name} $(tput setaf 2)#$(tput sgr0) " LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
-	    chroot_clean ${chroot_path}
-	else
-	    echo "Can't determine type of distribution."
+	if ! chroot_prepare ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
 	    return 1
 	fi
     fi
+
+    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 1)#$(tput sgr0) " PS2="$(tput setaf 1)>$(tput sgr0) " \
+	 LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
+    mod_chroot_clean ${chroot_path}
 
     return 0
 }
 
 chr_user_run () {
+    local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}; shift
+    local chroot_path=$(chr_path ${name}); [ -d "${chroot_path}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
+    local user_id=$(id -nu)
+    local group_id=$(id -ng)
+
+    # нужный модуль уже загружен после check_distribution.
+    if check_distribution ${chroot_path}; then
+	if ! mod_chroot_prepare ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    else
+	if ! chroot_prepare ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    fi
+
+    sudo SHELL=${SHELL} HOME=${HOME} \
+	 PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
+	 LANG=en_US.UTF-8 chroot --userspec=${user_id}:${group_id} ${chroot_path} ${@}
+    mod_chroot_clean ${chroot_path}
+    
     return 0
 }
 
