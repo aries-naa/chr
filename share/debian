@@ -53,6 +53,7 @@ mod_install_distrib () {
 	# локализация.
 	cat << EOF | sudo tee -a ${chroot_path}/etc/locale.gen > /dev/null
 en_US.UTF-8 UTF-8
+ru_RU.UTF-8 UTF-8
 EOF
 	
 	# bashrc.

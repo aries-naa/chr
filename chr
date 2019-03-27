@@ -7,7 +7,7 @@
 # chr -c name                                - очистка примонтированных каталогов
 # chr -p name                                - корневой каталог
 # chr name [command]                         - использование (умеет отличать дистрибутивы)
-# chr -a [name]                              - добавить пользователя
+# chr -a name                                - добавить пользователя
 # chr -u name [command]                      - использоание от имени пользователя
 
 chr_modules=(~/.chr /usr/local/share/chr /usr/share/chr)
@@ -106,7 +106,7 @@ chr -d name                                - удаление
 chr -c name                                - очистка примонтированных каталогов
 chr -p name                                - корневой каталог
 chr name [command]                         - использование (умеет отличать дистрибутивы)
-chr -a [name]                              - обавить пользователя
+chr -a name                                - обавить пользователя
 chr -u name [command]                      - использование от имени пользователя
 EOF
 }
@@ -151,16 +151,25 @@ chr_install_build () {
 	sudo sed -i 's/%sudo.*/%sudo ALL=\(ALL:ALL\) NOPASSWD:ALL/g' ${chroot_path}/etc/sudoers
 	echo Defaults timestamp_timeout = 120 | sudo tee -a ${chroot_path}/etc/sudoers > /dev/null
 
-	# создание пользователя.
-	local chroot_user=${USER}
-	local chroot_home=${HOME}
-	local chroot_shell=${SHELL}
-	local chroot_id=$(id -u)
+    else
+	return 1
+    fi
+}
 
-	sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
-	
-	# users's zsh.
-	cat << EOF > ${chroot_path}${chroot_home}/.zshrc
+chr_user_add () {
+    local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}
+    local chroot_path=$(chr_path ${name})
+
+    # создание пользователя.
+    local chroot_user=${USER}
+    local chroot_home=${HOME}
+    local chroot_shell=${SHELL}
+    local chroot_id=$(id -u)
+    
+    sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
+    	
+    # users's zsh.
+    cat << EOF > ${chroot_path}${chroot_home}/.zshrc
 HISTFILE=~/.histfile
 HISTSIZE=1000
 SAVEHIST=1000
@@ -172,12 +181,8 @@ autoload -Uz compinit
 compinit
 
 export LANG=en_US.UTF-8
-export PROMPT="\$(tput setaf 6)${name}\$(tput sgr0) %% "
 EOF
 
-    else
-	return 1
-    fi
 }
 
 chr_delete () {
@@ -229,6 +234,8 @@ chr_path () {
 chr_run () {
     local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}; shift
     local chroot_path=$(chr_path ${name}); [ -d "${chroot_path}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
+    local root_shell=$(getent passwd root | awk -F : '{print $7}')
+    local root_home=$(getent passwd root | awk -F : '{print $6}')
 
     # нужный модуль уже загружен после check_distribution.
     if check_distribution ${chroot_path}; then
@@ -243,8 +250,9 @@ chr_run () {
 	fi
     fi
 
-    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 1)#$(tput sgr0) " PS2="$(tput setaf 1)>$(tput sgr0) " \
-	 LANG=en_US.UTF-8 SHELL=/bin/bash chroot ${chroot_path} ${@}
+    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
+	 SHELL=${root_shell} HOME=${root_home} \
+	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
     mod_chroot_clean ${chroot_path}
 
     return 0
@@ -270,7 +278,7 @@ chr_user_run () {
     fi
 
     sudo SHELL=${SHELL} HOME=${HOME} \
-	 PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
+	 PS1="$(tput setaf 6)chr:${name} %%$(tput sgr0) " PS2="$(tput setaf 6)>$(tput sgr0) " \
 	 LANG=en_US.UTF-8 chroot --userspec=${user_id}:${group_id} ${chroot_path} ${@}
     mod_chroot_clean ${chroot_path}
     
@@ -290,6 +298,7 @@ case ${command} in
     -d) shift; chr_delete ${@} ;;
     -c) shift; chr_clean ${@} ;;
     -p) shift; chr_path ${@} ;;
+    -a) shift; chr_user_add ${@} ;;
     -u) shift; chr_user_run ${@} ;;
     *)  chr_run ${@} ;;
 esac
