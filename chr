@@ -278,7 +278,7 @@ chr_user_run () {
     fi
 
     sudo SHELL=${SHELL} HOME=${HOME} \
-	 PS1="$(tput setaf 6)chr:${name} %%$(tput sgr0) " PS2="$(tput setaf 6)>$(tput sgr0) " \
+	 PS1="$(tput setaf 6)chr:${name} $(tput sgr0)%% " PS2="> " \
 	 LANG=en_US.UTF-8 chroot --userspec=${user_id}:${group_id} ${chroot_path} ${@}
     mod_chroot_clean ${chroot_path}
     

@@ -1,4 +1,7 @@
 -*- mode: org -*-
-* TODO пользовательские настройки bash и zsh
-* TODO глюк с копированием файлов во время chr -b <name>
-* TODO chr -u <name>
+* DONE пользовательские настройки bash и zsh
+  CLOSED: [2019-04-18 Чт 16:34]
+* DONE глюк с копированием файлов во время chr -b <name>
+  CLOSED: [2019-04-18 Чт 16:34]
+* DONE chr -u <name>
+  CLOSED: [2019-04-18 Чт 16:34]
