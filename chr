@@ -26,24 +26,33 @@ check_distribution () {
 }
 
 chroot_prepare () {
-
     # проверка существования каталогов.
-    local root=$1; [ -n "${root}" ] || return 1
+    local name=$1; [ -n "${name}" ] || return 1
+    local root=$2; [ -d "${root}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
+    local home="${HOME}/.chr/.home/$name"
+
     if [ -n "${root}"           -a \
             -d ${root}/proc     -a \
             -d ${root}/sys      -a \
             -d ${root}/dev      -a \
 	    -d ${root}/dev/pts  -a \
+	    -d ${root}/dev/shm  -a \
             -d ${root}/tmp      -a \
-            -d ${root}/run ]; then
+            -d ${root}/run      -a \
+            -d ${home} ]; then
 
-        # подготовка среды chroot.
-        sudo mount --bind /proc    ${root}/proc
-        sudo mount --bind /sys     ${root}/sys
-        sudo mount --bind /dev     ${root}/dev
-        sudo mount --bind /dev/pts ${root}/dev/pts
-        sudo mount --bind /tmp     ${root}/tmp
-        sudo mount --bind /run     ${root}/run
+        # подготовка среды chroot. $(sudo fuser / 2>&1 | grep r | wc -l)
+
+	if [ $(sudo fuser ${root} 2>&1 | grep r | wc -l) = "0" ]; then
+            sudo mount --bind /proc    ${root}/proc
+            sudo mount --bind /sys     ${root}/sys
+            sudo mount --bind /dev     ${root}/dev
+            sudo mount --bind /dev/pts ${root}/dev/pts
+            sudo mount --bind /dev/shm ${root}/dev/shm
+            sudo mount --bind /tmp     ${root}/tmp
+            sudo mount --bind /run     ${root}/run
+	    sudo mount --bind ${home}  ${root}/home
+	fi
 
         # /etc/resolv.conf
         if [ -r /etc/resolv.conf ]; then
@@ -54,9 +63,11 @@ chroot_prepare () {
         echo  ${root}/proc    $(if [ -d ${root}/proc ];    then echo ok; else echo fail; fi)
         echo  ${root}/sys     $(if [ -d ${root}/sys ];     then echo ok; else echo fail; fi)
 	echo  ${root}/dev/pts $(if [ -d ${root}/dev/pts ]; then echo ok; else echo fail; fi)
+	echo  ${root}/dev/shm $(if [ -d ${root}/dev/shm ]; then echo ok; else echo fail; fi)
         echo  ${root}/dev     $(if [ -d ${root}/dev ];     then echo ok; else echo fail; fi)
         echo  ${root}/tmp     $(if [ -d ${root}/tmp ];     then echo ok; else echo fail; fi)
         echo  ${root}/run     $(if [ -d ${root}/run ];     then echo ok; else echo fail; fi)
+	echo  ${home}         $(if [ -d ${home} ];         then echo ok; else echo fail; fi)
         return 1
     fi
 
@@ -71,12 +82,16 @@ chroot_clean () {
     [ -d "${root}" ] || return 1
 
     # размнотирование.
-    sudo umount ${root}/run
-    sudo umount ${root}/dev/pts
-    sudo umount ${root}/dev
-    sudo umount ${root}/sys
-    sudo umount ${root}/proc
-    sudo umount ${root}/tmp
+    if [ $(sudo fuser ${root} 2>&1 | grep r | wc -l) = "0" ]; then
+	sudo umount ${root}/run
+	sudo umount ${root}/dev/pts
+	sudo umount ${root}/dev/shm
+	sudo umount ${root}/dev
+	sudo umount ${root}/sys
+	sudo umount ${root}/proc
+	sudo umount ${root}/tmp
+	sudo umount ${root}/home
+    fi
 
     return 0
 }
@@ -117,10 +132,11 @@ chr_install () {
     local hostname=$(hostname)
 
     local chroot_path=$(chr_path ${name})
+    local home_path="${HOME}/.chr/.home/${name}"
     load_module ${distribution} || {echo "Can't load module for <${distribution}>"; return 1}
 
-    if mkdir -p ${chroot_path}; then
-	if mod_install_distrib ${chroot_path} ${@}; then
+    if mkdir -p ${chroot_path} && mkdir -p ${home_path}; then
+	if mod_install_distrib ${name} ${chroot_path} ${@}; then
 
 	    # hostname.
 	    echo ${hostname} | sudo tee ${chroot_path}/etc/hostname > /dev/null
@@ -165,11 +181,24 @@ chr_user_add () {
     local chroot_home=${HOME}
     local chroot_shell=${SHELL}
     local chroot_id=$(id -u)
-    
+
+    # нужный модуль уже загружен после check_distribution.
+    if check_distribution ${chroot_path}; then
+	if ! mod_chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    else
+	if ! chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    fi
+
     sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
     	
     # users's zsh.
-    cat << EOF > ${chroot_path}${chroot_home}/.zshrc
+    sudo cat << EOF > ${chroot_path}${chroot_home}/.zshrc
 HISTFILE=~/.histfile
 HISTSIZE=1000
 SAVEHIST=1000
@@ -182,7 +211,9 @@ compinit
 
 export LANG=en_US.UTF-8
 EOF
+    sudo chown ${chroot_user} ${chroot_path}${chroot_home}/.zshrc
 
+    mod_chroot_clean ${chroot_path}
 }
 
 chr_delete () {
@@ -239,6 +270,34 @@ chr_run () {
 
     # нужный модуль уже загружен после check_distribution.
     if check_distribution ${chroot_path}; then
+	if ! mod_chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    else
+	if ! chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${chroot_path}>."
+	    return 1
+	fi
+    fi
+
+    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
+	 SHELL=${root_shell} HOME=${root_home} \
+	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
+
+    mod_chroot_clean ${chroot_path}
+
+    return 0
+}
+
+chr_prepare () {
+    local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}; shift
+    local chroot_path=$(chr_path ${name}); [ -d "${chroot_path}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
+    local root_shell=$(getent passwd root | awk -F : '{print $7}')
+    local root_home=$(getent passwd root | awk -F : '{print $6}')
+
+    # нужный модуль уже загружен после check_distribution.
+    if check_distribution ${chroot_path}; then
 	if ! mod_chroot_prepare ${chroot_path}; then
 	    echo "Can't prepare chroot <${chroot_path}>."
 	    return 1
@@ -250,10 +309,10 @@ chr_run () {
 	fi
     fi
 
-    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
-	 SHELL=${root_shell} HOME=${root_home} \
-	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
-    mod_chroot_clean ${chroot_path}
+#    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
+#	 SHELL=${root_shell} HOME=${root_home} \
+#	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
+#    mod_chroot_clean ${chroot_path}
 
     return 0
 }
@@ -266,13 +325,13 @@ chr_user_run () {
 
     # нужный модуль уже загружен после check_distribution.
     if check_distribution ${chroot_path}; then
-	if ! mod_chroot_prepare ${chroot_path}; then
-	    echo "Can't prepare chroot <${chroot_path}>."
+	if ! mod_chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${name}>."
 	    return 1
 	fi
     else
-	if ! chroot_prepare ${chroot_path}; then
-	    echo "Can't prepare chroot <${chroot_path}>."
+	if ! chroot_prepare ${name} ${chroot_path}; then
+	    echo "Can't prepare chroot <${name}>."
 	    return 1
 	fi
     fi
@@ -297,6 +356,7 @@ case ${command} in
     -b) shift; chr_install_build ${@} ;;
     -d) shift; chr_delete ${@} ;;
     -c) shift; chr_clean ${@} ;;
+    -m) shift; chr_prepare ${@} ;;
     -p) shift; chr_path ${@} ;;
     -a) shift; chr_user_add ${@} ;;
     -u) shift; chr_user_run ${@} ;;

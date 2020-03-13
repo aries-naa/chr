@@ -1,0 +1,116 @@
+#!/bin/zsh
+
+mod_chroot_prepare () {
+
+    # проверка существования каталогов.
+    name=$1
+    chroot_path=$2
+
+    if chroot_prepare ${name} ${chroot_path}; then
+	return 0
+    else
+        return 1
+    fi
+
+    return 0
+}
+
+mod_chroot_clean () {
+
+    # проверка существования каталогов.
+    local root=$1
+    [ -n "${root}" ] || return
+    [ -d "${root}" ] || return
+
+    chroot_clean ${root}
+
+    return 0
+}
+
+# path [release [arch]]
+mod_install_distrib () {
+    local name=${1}
+    local chroot_path=${2}; [ -n "$chroot_path" ] || return 1
+    local release=${3:-${release}}
+    local arch=${4:-amd64}
+
+    mkdir -p ${chroot_path}/run/shm || {echo "Can't create ${chroot_path}/run/shm"; return 1}
+
+    if mkdir -p ${chroot_path}; then
+
+	# установка debootstrap.
+	sudo /usr/sbin/debootstrap --no-check-gpg --variant=minbase --include="zsh,aptitude,locales,less,mc,sudo,iputils-ping,passwd,man-db" --arch=${arch} --components=${components} ${release} ${chroot_path}
+
+	# сеть/интернет - resolv.conf
+	[ -r /etc/resolv.conf ] && sudo cp /etc/resolv.conf ${chroot_path}/etc/resolv.conf
+	
+	# временная зона.
+	[ -r /etc/timezone ]  && sudo cp /etc/timezone  ${chroot_path}/etc/
+	[ -r /etc/localtime ] && sudo cp /etc/localtime ${chroot_path}/etc/
+	
+	# локализация.
+	cat << EOF | sudo tee -a ${chroot_path}/etc/locale.gen > /dev/null
+en_US.UTF-8 UTF-8
+ru_RU.UTF-8 UTF-8
+EOF
+	
+	# bashrc.
+	if [ -f ${chroot_path}/etc/bash.bashrc ]; then
+	    sudo rm ${chroot_path}/etc/bash.bashrc
+	fi
+
+	# apt.
+	if [ -d ${chroot_path}/etc/apt/apt.conf.d ]; then
+	    cat << EOF | sudo tee ${chroot_path}/etc/apt/apt.conf.d/00secure > /dev/null
+APT::Get::AllowUnauthenticated "true";
+Aptitude::CmdLine::Ignore-Trust-Violations "true";
+EOF
+	fi
+	
+	# XAUTHORITY.
+	sudo mkdir -p ${chroot_path}$(dirname ${XAUTHORITY})
+	sudo chown ${USER}:users ${chroot_path}$(dirname ${XAUTHORITY})
+
+	if sudo test -f ${chroot_path}/root/.bashrc; then
+	    sudo rm -f ${chroot_path}/root/.bashrc
+	fi
+
+	if mod_chroot_prepare ${name} ${chroot_path}; then
+            sudo chroot ${chroot_path} /usr/sbin/locale-gen
+            mod_chroot_clean ${chroot_path}
+        else
+            return 1
+        fi
+
+	return 0
+    else
+	echo "Can't create chroot dir: ${chroot_path}"
+	return 1
+    fi
+}
+
+mod_install_build () {
+
+    local name=${1}
+    chr_run ${name} aptitude -y install \
+	build-essential \
+	dpkg-dev \
+	debhelper \
+	dkms \
+	make \
+	m4 \
+	flex \
+	texinfo \
+	squashfs-tools \
+	debootstrap \
+	uuid-runtime \
+	live-build \
+	libncurses-dev \
+	bc \
+	bison \
+	libssl-dev \
+	libelf-dev \
+	elfutils \
+	syslinux \
+	extlinux
+}

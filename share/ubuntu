@@ -1,0 +1,6 @@
+#!/bin/zsh
+
+release=bionic
+components=main,universe,restricted,multiverse
+
+load_module deb
