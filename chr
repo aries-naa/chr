@@ -6,9 +6,10 @@
 # chr -d name                                - удаление
 # chr -c name                                - очистка примонтированных каталогов
 # chr -p name                                - корневой каталог
-# chr name [command]                         - использование (умеет отличать дистрибутивы)
-# chr -a name                                - добавить пользователя
+# chr -a [user] name                         - добавить пользователя
 # chr -u name [command]                      - использоание от имени пользователя
+# chr -x user name [command]                 - использоание от имени пользователя user
+# chr name [command]                         - использование
 
 chr_modules=(~/.chr /usr/local/share/chr /usr/share/chr)
 chr_home=~/chroot
@@ -120,9 +121,10 @@ chr -b name                                - установка пакетов �
 chr -d name                                - удаление
 chr -c name                                - очистка примонтированных каталогов
 chr -p name                                - корневой каталог
-chr name [command]                         - использование (умеет отличать дистрибутивы)
-chr -a name                                - обавить пользователя
+chr -a [user] name                         - обавить пользователя
 chr -u name [command]                      - использование от имени пользователя
+chr -x user name [command]                 - использование от имени пользователя user
+chr name [command]                         - использование
 EOF
 }
 
@@ -143,6 +145,13 @@ chr_install () {
 
 	    # hosts.
 	    echo 127.0.0.1 localhost ${hostname} ${name} | sudo tee ${chroot_path}/etc/hosts > /dev/null
+
+	    # root's bash.
+	    cat << EOF | sudo tee ${chroot_path}/root/.bashrc
+PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) "
+PS2="$(tput setaf 2)>$(tput sgr0) "
+export LANG=en_US.UTF-8
+EOF
 
 	    return 0
 	else
@@ -173,14 +182,25 @@ chr_install_build () {
 }
 
 chr_user_add () {
+    # chr -a {user} name
+    if [ "${#}" = "2" ]; then
+	local chroot_user=${1}
+	if [ -z $(getent passwd ${chroot_user}) ]; then
+	    echo "Can't find user ${chroot_user}."
+	    return 1
+	fi
+	shift
+    else
+	local chroot_user=${USER}
+    fi
     local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}
     local chroot_path=$(chr_path ${name})
 
     # создание пользователя.
-    local chroot_user=${USER}
-    local chroot_home=${HOME}
-    local chroot_shell=${SHELL}
-    local chroot_id=$(id -u)
+    local chroot_home=$(getent passwd ${chroot_user} | awk -F : '{print $6}'); [ -n "${chroot_home}" ] || {echo "Can't find user home"}
+    local chroot_shell=$(getent passwd ${chroot_user} | awk -F : '{print $7}'); [ -n "${chroot_shell}" ] || {echo "Can't find user shell"}
+    local chroot_id=$(getent passwd ${chroot_user} | awk -F : '{print $3}'); [ -n "${chroot_id}" ] || {echo "Can't find user id"}
+    local user_gid=$(getent passwd ${chroot_user} | awk -F : '{print $4}'); [ -n "${user_gid}" ] || {echo "Can't find grop id"}
 
     # нужный модуль уже загружен после check_distribution.
     if check_distribution ${chroot_path}; then
@@ -195,10 +215,16 @@ chr_user_add () {
 	fi
     fi
 
-    sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g users -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
-    	
-    # users's zsh.
-    sudo cat << EOF > ${chroot_path}${chroot_home}/.zshrc
+    chroot_gid=$(sudo chroot ${chroot_path} getent group ${user_gid} | awk -F : '{print $3}')
+    if [ -n "${chroot_gid}" ]; then
+
+	sudo chroot ${chroot_path} useradd -m -d ${chroot_home} -g ${chroot_gid} -G sudo -s ${chroot_shell} -u ${chroot_id} ${chroot_user}
+
+	# users's zsh.
+	cat << EOF | sudo tee ${chroot_path}${chroot_home}/.zshrc
+PS1="$(tput setaf 6)chr:${name} $(tput sgr0)%% "
+PS2="> "
+
 HISTFILE=~/.histfile
 HISTSIZE=1000
 SAVEHIST=1000
@@ -211,7 +237,11 @@ compinit
 
 export LANG=en_US.UTF-8
 EOF
-    sudo chown ${chroot_user} ${chroot_path}${chroot_home}/.zshrc
+	sudo chown ${chroot_user}:${chroot_gid} ${chroot_path}${chroot_home}/.zshrc
+
+    else
+	echo "Can't find primary group ${user_gid}"
+    fi
 
     mod_chroot_clean ${chroot_path}
 }
@@ -236,7 +266,7 @@ chr_clean () {
 
     local name=${1}; [ -n "${name}" ] || {echo "Can't determine chroot - name empty."; return 1}
     local root=$(chr_path ${name})
-    
+
     mount | awk '{print $3}' | grep ${root} | sort -r | xargs -n1 -r sudo umount -fl
 
     local mounts
@@ -281,8 +311,7 @@ chr_run () {
 	fi
     fi
 
-    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
-	 SHELL=${root_shell} HOME=${root_home} \
+    sudo SHELL=${root_shell} HOME=${root_home} \
 	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
 
     mod_chroot_clean ${chroot_path}
@@ -309,15 +338,11 @@ chr_prepare () {
 	fi
     fi
 
-#    sudo PS1="$(tput setaf 6)chr:${name} $(tput setaf 2)#$(tput sgr0) " PS2="$(tput setaf 2)>$(tput sgr0) " \
-#	 SHELL=${root_shell} HOME=${root_home} \
-#	 LANG=en_US.UTF-8 chroot ${chroot_path} ${@}
-#    mod_chroot_clean ${chroot_path}
-
     return 0
 }
 
 chr_user_run () {
+    local chroot_user=${USER}
     local name=${1}; [ -n "${name}" ] || {echo "Can't run in chroot - name empty."; return 1}; shift
     local chroot_path=$(chr_path ${name}); [ -d "${chroot_path}" ] || {echo "Can't run in chroot - path ${chroot_path} not found."; return 1}
     local user_id=$(id -nu)
@@ -337,10 +362,9 @@ chr_user_run () {
     fi
 
     sudo SHELL=${SHELL} HOME=${HOME} \
-	 PS1="$(tput setaf 6)chr:${name} $(tput sgr0)%% " PS2="> " \
-	 LANG=en_US.UTF-8 chroot --userspec=${user_id}:${group_id} ${chroot_path} ${@}
+	LANG=en_US.UTF-8 chroot --userspec=${user_id}:${group_id} ${chroot_path} ${@}
     mod_chroot_clean ${chroot_path}
-    
+
     return 0
 }
 
@@ -360,5 +384,6 @@ case ${command} in
     -p) shift; chr_path ${@} ;;
     -a) shift; chr_user_add ${@} ;;
     -u) shift; chr_user_run ${@} ;;
+    -x) shift; chr_xuser_run ${@} ;;
     *)  chr_run ${@} ;;
 esac

@@ -1,0 +1,6 @@
+#!/bin/zsh
+
+release=bionic
+components=main,contrib,non-free
+
+load_module deb

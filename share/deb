@@ -112,5 +112,6 @@ mod_install_build () {
 	libelf-dev \
 	elfutils \
 	syslinux \
-	extlinux
+	extlinux \
+	dosfstools
 }
